@@ -1,0 +1,101 @@
+#
+# PID Format Controller Pseudocode and Development
+#
+# Need to send twelve parameters to system
+# - Six joint positions
+# - Six joint velocities
+#
+# xdot = Kp(xd-x)+Ki*integral(xd-x)dt+Ka*xddot
+# Ka should nominally be 1
+#
+
+# Close any existing socket connections
+socket_close()
+
+# Establish new parameters and open connection to server
+ADDRESS = "10.1.1.5"
+PORT = 30002
+isRunning = socket_open(ADDRESS,PORT)
+
+# Check socket
+if isRunning:
+	textmsg("Successfully connected to server.")
+else:
+	textmsg("Unable to connect to server at: ",ADDRESS,PORT)
+end
+
+# Set initial trigger conditions
+controlTrigger = [True,True,True,True,True,True,True,True,True,True,True,True]
+threadTrigger = False
+
+# Initialize gains
+Kp = 1.0
+Ki = 0.0
+Ka = 1.0
+
+# Initialize desired position and velocity waypoint 
+jointVals = [0,0,0,0,0,0,0,0,0,0,0,0]
+jointPosesInit = get_actual_joint_positions()
+jointVelsInit = get_actual_joint_speeds()
+desValsOld = [12,jointPosesInit[0],jointPosesInit[1],jointPosesInit[2],jointPosesInit[3],jointPosesInit[4],jointPosesInit[5],jointVelsInit[0],jointVelsInit[1],jointVelsInit[2],jointVelsInit[3],jointVelsInit[4],jointVelsInit[5]]
+jointErrorInt = [0,0,0,0,0,0]
+jointVelCommands = [0,0,0,0,0,0]
+
+# Create control thread to run in parallel with main loop
+thread controlThread():
+	while isRunning:
+		if threadTrigger:
+			jointPosesCurr = get_actual_joint_positions()
+			jointVelsCurr = get_actual_joint_speeds()
+			i = 0
+			while i<6:
+				jointVelCommands[i] = Kp*(jointPosesDes[i]-jointPosesCurr[i])+Ki*(jointErrorInt[i])+Ka*jointVelsDes[i]
+				i=i+1
+			end
+			textmsg("Thread velocities: ",jointVelCommands)
+			speedj(jointVelCommands,1.0,0.5)
+		else:
+			sync()
+		end
+	end
+end
+
+# Begin running thread
+threadHandle = run controlThread()
+
+# Check if thread is running
+if threadHandle:
+	textmsg("Thread running.")
+else:
+	textmsg("Unable to start thread.")
+end
+
+# Begin main loop to receive values from socket and calculate velocities to hand off to thread
+while isRunning:
+	desVals = socket_read_ascii_float(12)
+	textmsg("Input: ",desVals)
+	if desVals[0]<1:
+		desVals = desValsOld
+	end
+	if desVals[0]>1:
+		jointPosesDes = [desVals[1],desVals[2],desVals[3],desVals[4],desVals[5],desVals[6]]
+		jointVelsDes = [desVals[7],desVals[8],desVals[9],desVals[10],desVals[11],desVals[12]]
+		jointPosesCurr = get_actual_joint_positions()
+		jointVelsCurr = get_actual_joint_speeds()
+		i = 0
+		j = 0
+		while j<10:
+			while i<6:
+				jointErrorInt[i] = jointErrorInt[i]+(jointPosesDes[i]-jointPosesCurr[i])
+				controlTrigger[i] = True
+				i = i+1
+			end
+			j = j+1
+			if (j == 0):
+				jointErrorInt = [0,0,0,0,0,0]
+			end
+		end
+		threadTrigger = True
+	end
+	desValsOld = desVals
+end
